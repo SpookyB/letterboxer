@@ -2,60 +2,61 @@ using ArgParse
 
 ### helper
 
-function az_mask(character)
-    return UInt32(2^(character - 'a'))
+function az_mask(char::Char)
+    return UInt32(2^(char - 'a'))
 end 
+
+function az_trail(string::String)
+    map(az_mask, collect(string))
+end
+
+function enumerate_from(iter, start, step=1)
+    zip(Iterators.countfrom(start, step), iter)
+end
 
 ### constructors
 
-struct Component
-    word::String
-    trail::Array{UInt32}
-    contents::UInt32
-    function Component(word::String)
-        trail = map(az_mask, collect(word))
-        contents = reduce(|, trail)
-        return new(word, trail, contents)
+struct Puzzle
+    positions::Dict{UInt32, UInt32}
+    letters::UInt32
+    function Puzzle(string::String, side_length::UInt32)
+        trail = az_trail(string)
+        positions = Dict(letter => index÷side_length
+            for (index, letter) in enumerate_from(trail, side_length))
+        return new(positions, reduce(|, trail))
+    end
+end
+
+struct Word
+    index::UInt32
+    last::UInt32
+    letters::UInt32
+    function Word(trail::Array{UInt32}, index::UInt32)
+        return new(index, trail[end], reduce(|, trail))
     end
 end
 
 struct Solution
-    words::Array{String}
-    contents::UInt32
-    function Solution(s::Solution, c::Component)
-        if s.words[end][end] != c.word[1]
-            return nothing
-        end
-        words = [s.words; c.word]
-        contents = s.contents | c.contents
-        return new(words, contents)
+    prev::Union{Solution,Nothing}
+    index::UInt32
+    last::UInt32
+    letters::UInt32
+    function Solution(solution::Solution, word::Word)
+        letters = solution.letters | word.letters
+        return new(solution, word.index, word.last, letters)
     end
-    function Solution(s::Nothing, c::Component)
-        return new([c.word], c.contents)
-    end
-end
-
-struct Puzzle
-    sides::Array{UInt32}
-    contents::UInt32
-    function Puzzle(letters, side_length)
-        az_indices = map(az_mask, collect(letters))
-        sides = [reduce(|, side_indices) for side_indices in Iterators.partition(az_indices, side_length)]
-        contents = reduce(|, sides)
-        return new(sides, contents)
+    function Solution(word::Word)
+        return new(nothing, word.index, word.last, word.letters)
     end
 end
 
 ### logic
 
-function walkable(puzzle, component)
-    if puzzle.contents != (puzzle.contents | component.contents)
-        return false
-    end
+function walkable(puzzle, trail)
     last = 0
-    for node in component.trail
-        current = findfirst((side == (side | node) for side in puzzle.sides))
-        if (current == nothing) | (current == last)
+    for letter in trail
+        current = get(puzzle.positions, letter, 0)
+        if (current == last) | (current == 0)
             return false
         end
         last = current
@@ -63,32 +64,53 @@ function walkable(puzzle, component)
     return true
 end
 
-function print_valid(puzzle, words, maximum_solution_size)
-    _walkable(component) = walkable(puzzle, component)
-    components = filter(_walkable, map(Component, words))
-    solutions = [nothing]
-    for solution_size in 1:maximum_solution_size
-        pairs = Iterators.product(solutions, components)
-        solutions = filter(!isnothing, map((pair) -> Solution(pair[1], pair[2]), pairs))
-        println("===$(solution_size) word solutions===")
-        for solution in solutions
-            if puzzle.contents == solution.contents
-                println(join(solution.words, " "))
-            end
+function print_solutions(puzzle, dictionary, maximum_solution_size)
+
+    words = Dict()
+    solutions = []
+    for (index, entry) in enumerate(dictionary)
+        trail = az_trail(entry)
+        if walkable(puzzle, trail)
+            word = Word(trail, UInt32(index))
+            words[trail[1]] = [get(words, trail[1], []); word]
+            solutions = [solutions; Solution(word)]
         end
     end
+
+    for solution_size in range(1, maximum_solution_size)
+
+        if solution_size != 1
+            solutions = Iterators.flatten(
+                [Solution(solution, word) for word in words[solution.last]]
+                    for solution in solutions)
+        end
+
+        println("===$(solution_size) word solutions===")
+        for solution in solutions
+            if puzzle.letters == solution.letters
+                text = ""
+                while solution != nothing
+                    text = "$(dictionary[solution.index]) $text"
+                    solution = solution.prev
+                end
+                println(text)
+            end
+        end
+
+    end
+
 end
 
 ### io
 
-function load_dictionary(dictionary, minimum_word_length)
-    words_txt = open(dictionary, "r")
-    words = collect(eachline(words_txt))
-    close(words_txt)
+function load_dictionary(dictionary_path, minimum_word_length)
+    dictionary_file = open(dictionary_path, "r")
+    dictionary = collect(eachline(dictionary_file))
+    close(dictionary_file)
     if minimum_word_length > 1
-        words = filter((word) -> length(word) > minimum_word_length, words)
+        dictionary = filter((entry) -> length(entry) > minimum_word_length, dictionary)
     end
-    return words
+    return dictionary
 end
 
 function parse_commandline()
@@ -98,33 +120,33 @@ function parse_commandline()
             arg_type = String
             required = true
         "side_length"
-            arg_type = Int
-            default = 3
+            arg_type = UInt32
+            default = UInt32(3)
         "-d", "--dictionary"
-            help = "path to dictionary"
+            help = "path to dictionary_path"
             arg_type = String
-            dest_name = "dictionary"
+            dest_name = "dictionary_path"
             default = "./resources/dictionary.txt"
         "-m", "--minimum"
             help = "minimum word length"
-            arg_type = Int
+            arg_type = UInt32
             dest_name = "minimum_word_length"
-            default = 1
+            default = UInt32(1)
         "-s", "--solutions"
             help = "max words for solutions"
-            arg_type = Int
+            arg_type = UInt32
             dest_name = "maximum_solution_size"
-            default = 3
+            default = UInt32(3)
     end
     return parse_args(s)
 end
 
-function main()
-    opt = parse_commandline()
-    words = load_dictionary(opt["dictionary"], opt["minimum_word_length"])
+function main(opt)
     puzzle = Puzzle(opt["letters"], opt["side_length"])
-    print_valid(puzzle, words, opt["maximum_solution_size"])
+    dictionary = load_dictionary(opt["dictionary_path"], opt["minimum_word_length"])
+    print_solutions(puzzle, dictionary, opt["maximum_solution_size"])
 end
 
-main()
-
+if abspath(PROGRAM_FILE) == @__FILE__
+    main(parse_commandline())
+end
