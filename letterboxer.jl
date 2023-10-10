@@ -2,35 +2,34 @@ using ArgParse
 
 ### helper
 
-function az_mask(char::Char)
-    return UInt32(2^(char - 'a'))
+function az_num(char::Char)
+    return UInt8(char - 'a')
 end 
 
 function az_trail(string::String)
-    map(az_mask, collect(string))
+    return map(az_num, collect(string))
+end
+
+function trail_letters(trail)
+    return reduce(|, map(UInt32, map(exp2, trail)))
 end
 
 function enumerate_from(iter, start, step=1)
-    zip(Iterators.countfrom(start, step), iter)
+    return zip(Iterators.countfrom(start, step), iter)
 end
 
 ### types
 
-struct Word
-    text::String
-    last::UInt32
-    letters::UInt32
-end
-
 struct Proposal
-    prev::Union{Proposal,Nothing}
-    word::Word
+    next::Union{ Base.RefValue{Proposal}, Base.RefValue{Nothing} }
+    first::UInt8
+    index::UInt16
     letters::UInt32
-    function Proposal(word::Word)
-        return new(nothing, word, word.letters)
+    function Proposal(trail, index)
+        return Ref(new(Ref(nothing), trail[1], index, trail_letters(trail)))
     end
-    function Proposal(proposal::Proposal, word::Word)
-        return new(proposal, word, proposal.letters | word.letters)
+    function Proposal(this::Base.RefValue{Proposal}, next::Base.RefValue{Proposal})
+        return Ref(new(next, this[].first, this[].index, this[].letters | next[].letters))
     end
 end
 
@@ -40,14 +39,14 @@ function puzzle(string::String, side_length::UInt32)
     trail = az_trail(string)
     positions = Dict(letter => index÷side_length
         for (index, letter) in enumerate_from(trail, side_length))
-    return positions, reduce(|, trail)
+    return positions, trail_letters(trail)
 end
 
 function walkable(positions, trail)
-    last = 0
+    last = -1
     for letter in trail
-        current = get(positions, letter, 0)
-        if (current == last) | (current == 0)
+        current = get(positions, letter, -1)
+        if (current == last) | (current == -1)
             return false
         end
         last = current
@@ -56,35 +55,36 @@ function walkable(positions, trail)
 end
 
 function build_words(positions, dictionary)
-    words = Dict()
+    words = Dict(letter => [] for letter in az_trail("abcdefghijklmnopqrstuvwxyz"))
+    trimmed_dictionary = []
     for entry in dictionary
         trail = az_trail(entry)
         if walkable(positions, trail)
-            word = Word(entry, trail[end], reduce(|, trail))
-            words[trail[1]] = [get(words, trail[1], []); word]
+            push!(trimmed_dictionary, entry)
+            push!(words[trail[end]], Proposal(trail, length(trimmed_dictionary)))
         end
     end
-    return words
+    return words, trimmed_dictionary
 end
 
-function print_proposal(io, proposal)
-    text = ""
-    while proposal != nothing
-        text = "$(proposal.word.text) $text"
-        proposal = proposal.prev
+function print_proposal(io, words, dictionary, proposal)
+    text = []
+    while proposal[] != nothing
+        push!(text, dictionary[proposal[].index])
+        proposal = proposal[].next
     end
-    println(io, text)
+    println(io, join(text, " "))
 end
 
-function print_solutions(io, required, words, proposal, depth) 
+function print_solutions(io, required, words, dictionary, proposal, depth) 
 
-    if required == proposal.letters
-        print_proposal(io, proposal)
+    if required == proposal[].letters
+        print_proposal(io, words, dictionary, proposal)
     end
 
     if depth > 1
-        for word in words[proposal.word.last]
-            print_solutions(io, required, words, Proposal(proposal, word), depth-1)
+        for word in words[proposal[].first]
+            print_solutions(io, required, words, dictionary, Proposal(word, proposal), depth-1)
         end
     end
 
@@ -137,16 +137,34 @@ end
 function main(opt)
     positions, required = puzzle(opt["letters"], opt["side_length"])
     dictionary = load_dictionary(opt["dictionary_path"], opt["minimum_word_length"])
-    words = build_words(positions, dictionary)
+    words, dictionary = build_words(positions, dictionary)
     io = isnothing(opt["output_path"]) ? stdout : open(opt["output_path"], "w")
     for letter in values(words)
-        Threads.@threads for word in letter
-            print_solutions(io, required, words, Proposal(word), opt["maximum_solution_size"])
+        Threads.@threads for proposal in letter
+            print_solutions(io, required, words, dictionary, proposal, opt["maximum_solution_size"])
         end
     end
     close(io)
 end
 
+using BenchmarkTools
+
 if abspath(PROGRAM_FILE) == @__FILE__
     main(parse_commandline())
+end
+
+using Profile
+using PProf
+function bench()
+    opt = Dict(
+        "letters" => "gasbltmedfin",
+        "side_length" => UInt32(3),
+        "dictionary_path" => "./resources/dictionary.txt",
+        "minimum_word_length" => UInt32(1),
+        "maximum_solution_size" => UInt32(4),
+        "output_path" => "out.txt"
+    )
+    Profile.Allocs.clear()
+    Profile.Allocs.@profile main(opt)
+    PProf.Allocs.pprof()
 end
