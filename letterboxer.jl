@@ -147,24 +147,6 @@ function main(opt)
     close(io)
 end
 
-using BenchmarkTools
-
 if abspath(PROGRAM_FILE) == @__FILE__
     main(parse_commandline())
-end
-
-using Profile
-using PProf
-function bench()
-    opt = Dict(
-        "letters" => "gasbltmedfin",
-        "side_length" => UInt32(3),
-        "dictionary_path" => "./resources/dictionary.txt",
-        "minimum_word_length" => UInt32(1),
-        "maximum_solution_size" => UInt32(4),
-        "output_path" => "out.txt"
-    )
-    Profile.Allocs.clear()
-    Profile.Allocs.@profile main(opt)
-    PProf.Allocs.pprof()
 end
