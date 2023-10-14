@@ -1,11 +1,3 @@
-function az_trail(string::String)
-    return (char -> UInt8(char - 'a')).(collect(string))
-end
-
-function trail_letters(trail::Array{UInt8})
-    return reduce(|, UInt32.(exp2.(trail)))
-end
-
 struct Predicate
     first::UInt8
     index::UInt16
@@ -37,6 +29,14 @@ function (sp::SolutionsPrinter)(
         end
     end
 
+end
+    
+function az_trail(string::String)
+    return (char -> UInt8(char - 'a')).(collect(string))
+end
+
+function trail_letters(trail::Array{UInt8})
+    return reduce(|, UInt32.(exp2.(trail)))
 end
 
 function walkable(positions, trail)
